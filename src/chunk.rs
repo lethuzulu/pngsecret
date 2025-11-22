@@ -12,7 +12,20 @@ pub struct Chunk {
 
 impl Chunk {
     pub fn new(chunk_type: ChunkType, data: Vec<u8>) -> Self {
-        unimplemented!()
+        let length = data.len() as u32;
+        
+        // Calculate CRC from chunk_type bytes + data
+        let mut crc_data = Vec::new();
+        crc_data.extend_from_slice(&chunk_type.bytes());
+        crc_data.extend_from_slice(&data);
+        let crc = crc32fast::hash(&crc_data);
+        
+        Self {
+            length,
+            chunk_type,
+            data,
+            crc
+        }
     }
 
     fn length(&self) -> u32 {
@@ -78,16 +91,34 @@ impl TryFrom<&[u8]> for Chunk {
         };
 
         let data_end = 8 + length as usize;
+        let crc_start = data_end;
+        let crc_end = crc_start + 4;
 
-        if value.len() < data_end {
+        if value.len() < crc_end {
             return Err(ChunkError::InvalidArray);
         }
 
         let chunk_data_bytes = value[8..data_end].to_vec();
 
-        let crc = crc32fast::hash(&chunk_data_bytes);
+        // Extract the CRC from the input bytes
+        let crc_bytes: [u8; 4] = match value[crc_start..crc_end].try_into() {
+            Ok(v) => v,
+            Err(_) => return Err(ChunkError::InvalidArray)
+        };
+        let provided_crc = u32::from_be_bytes(crc_bytes);
 
-        Ok(Self {length, chunk_type, data: chunk_data_bytes, crc })
+        // Calculate the expected CRC from chunk_type bytes + data
+        let mut crc_data = Vec::new();
+        crc_data.extend_from_slice(&chunk_bytes);  // chunk type bytes
+        crc_data.extend_from_slice(&chunk_data_bytes);  // data bytes
+        let calculated_crc = crc32fast::hash(&crc_data);
+
+        // Validate CRC
+        if provided_crc != calculated_crc {
+            return Err(ChunkError::InvalidArray);
+        }
+
+        Ok(Self {length, chunk_type, data: chunk_data_bytes, crc: calculated_crc })
     }
 }
 
